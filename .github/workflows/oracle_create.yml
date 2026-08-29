@@ -17,6 +17,25 @@ jobs:
           echo "${{ secrets.OCI_SSH_PUBLIC_KEY }}" > ~/instance_ssh_key.pub
           chmod 600 ~/instance_ssh_key.pub
 
+      # TEMPORARY DEBUG STEP — remove once auth is working.
+      # Prints only the LENGTH of each secret, never the value, so nothing
+      # sensitive reaches the log. A length of 0 means the secret is
+      # missing or misnamed in the repo's Settings > Secrets. This tells
+      # us which secret is the problem without exposing any of them.
+      - name: Debug - Check Secret Lengths
+        run: |
+          echo "OCI_USER_OCID length: ${#OCI_USER_OCID}"
+          echo "OCI_FINGERPRINT length: ${#OCI_FINGERPRINT}"
+          echo "OCI_TENANCY_OCID length: ${#OCI_TENANCY_OCID}"
+          echo "OCI_REGION length: ${#OCI_REGION}"
+          echo "OCI_KEY_FILE length: ${#OCI_KEY_FILE}"
+        env:
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+          OCI_KEY_FILE: ${{ secrets.OCI_KEY_FILE }}
+
       - name: Install OCI CLI
         run: pip install --upgrade oci-cli
 
