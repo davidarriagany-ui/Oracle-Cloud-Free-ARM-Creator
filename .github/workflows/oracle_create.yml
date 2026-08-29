@@ -2,9 +2,17 @@ name: Oracle Cloud Free ARM Creator (Ubuntu Minimal)
 
 on:
   schedule:
-    # Runs every 15 minutes to safely check Oracle's servers
+    # Runs every 15 minutes to stay safe from Oracle limits
     - cron: '*/15 * * * *'
   workflow_dispatch: # Allows you to manually trigger it
+
+# We set the Oracle variables globally so the tool automatically logs in
+env:
+  OCI_CLI_USER: ${{ secrets.OCI_USER_OCID }}
+  OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+  OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+  OCI_CLI_REGION: ${{ secrets.OCI_REGION }}
+  OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_KEY_FILE }}
 
 jobs:
   create_instance:
@@ -18,15 +26,10 @@ jobs:
         echo "${{ secrets.OCI_SSH_PUBLIC_KEY }}" > ~/instance_ssh_key.pub
         chmod 600 ~/instance_ssh_key.pub
 
-    # This is the correct, official Oracle Action
     - name: Run Auto-Discovery and Create Instance
       uses: oracle-actions/run-oci-cli-command@v1.3.2
       with:
-        user: ${{ secrets.OCI_USER_OCID }}
-        fingerprint: ${{ secrets.OCI_FINGERPRINT }}
-        tenancy: ${{ secrets.OCI_TENANCY_OCID }}
-        region: ${{ secrets.OCI_REGION }}
-        api_key: ${{ secrets.OCI_KEY_FILE }}
+        # The tool only needs to know the command; it reads credentials from env above
         command: |
           echo "Finding the latest Canonical Ubuntu 24.04 Minimal ARM image..."
           
