@@ -2,9 +2,9 @@ name: Oracle Cloud Free ARM Creator (Ubuntu Minimal)
 
 on:
   schedule:
-    # Runs every 15 minutes to stay safe from Oracle's rate limits
+    # Runs every 15 minutes
     - cron: '*/15 * * * *'
-  workflow_dispatch: # Allows you to manually trigger it for testing
+  workflow_dispatch: # Allows you to manually trigger it
 
 jobs:
   create_instance:
@@ -13,6 +13,7 @@ jobs:
     - name: Install OCI CLI
       run: |
         bash -c "$(curl -L https://githubusercontent.com)" -- --accept-all-defaults
+        # Explicitly make sure the runner can find the oci command in this job
         echo "/home/runner/bin" >> $GITHUB_PATH
 
     - name: Configure OCI CLI
@@ -25,8 +26,8 @@ jobs:
         echo "region=${{ secrets.OCI_REGION }}" >> ~/.oci/config
         echo "key_file=~/.oci/oci_api_key.pem" >> ~/.oci/config
         
-        echo "${{ secrets.OCI_KEY_FILE }}" > ~/.oci/oci_api_key.pem
-        chmod 600 ~/.oci/oci_api_key.pem
+        echo "${{ secrets.OCI_KEY_FILE }}" > ~/.oci/api_key.pem
+        chmod 600 ~/.oci/api_key.pem
 
     - name: Prepare SSH Public Key File
       run: |
@@ -37,29 +38,29 @@ jobs:
       run: |
         echo "Finding the latest Canonical Ubuntu 24.04 Minimal ARM image..."
         
-        # This targets images containing 'Minimal-aarch64' for version 24.04
-        IMAGE_ID=$(oci compute image list \
+        # We use /home/runner/bin/oci to completely bypass the 127 command not found error
+        IMAGE_ID=$(/home/runner/bin/oci compute image list \
           --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
           --operating-system "Canonical Ubuntu" \
           --operating-system-version "24.04" \
-          --query "data[?contains(\"display-name\", 'Minimal-aarch64')].id | [0]" \
+          --query "data[?contains(\"display-name\", 'Minimal-aarch64')].id |" \
           --raw-output)
           
         if [ "$IMAGE_ID" == "null" ] || [ -z "$IMAGE_ID" ]; then
-          echo "Error: Could not find the Minimal aarch64 image. Checking all 24.04 ARM images as fallback..."
-          IMAGE_ID=$(oci compute image list \
+          echo "Error: Could not find Minimal image. Checking all 24.04 ARM images as fallback..."
+          IMAGE_ID=$(/home/runner/bin/oci compute image list \
             --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
             --operating-system "Canonical Ubuntu" \
             --operating-system-version "24.04" \
-            --query "data[?contains(\"display-name\", 'aarch64')].id | [0]" \
+            --query "data[?contains(\"display-name\", 'aarch64')].id |" \
             --raw-output)
         fi
         
         echo "Successfully resolved Image ID: $IMAGE_ID"
 
         # Attempt to launch the ARM Always Free instance
-        oci compute instance launch \
-          --availability-domain $(oci iam availability-domain list --output table --query "data.name" --raw-output | head -n 1) \
+        /home/runner/bin/oci compute instance launch \
+          --availability-domain $(/home/runner/bin/oci iam availability-domain list --output table --query "data.name" --raw-output | head -n 1) \
           --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
           --shape "VM.Standard.A1.Flex" \
           --shape-config '{"ocpus":4,"memoryInGBs":24}' \
