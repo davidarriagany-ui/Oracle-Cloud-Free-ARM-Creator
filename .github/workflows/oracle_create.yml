@@ -10,24 +10,18 @@ jobs:
   create_instance:
     runs-on: ubuntu-latest
     steps:
-    - name: Install OCI CLI
-      run: |
-        bash -c "$(curl -L https://githubusercontent.com)" -- --accept-all-defaults
-        # Explicitly make sure the runner can find the oci command in this job
-        echo "/home/runner/bin" >> $GITHUB_PATH
+    - name: Checkout Code
+      uses: actions/checkout@v4
 
-    - name: Configure OCI CLI
-      run: |
-        mkdir -p ~/.oci
-        echo "[DEFAULT]" > ~/.oci/config
-        echo "user=${{ secrets.OCI_USER_OCID }}" >> ~/.oci/config
-        echo "fingerprint=${{ secrets.OCI_FINGERPRINT }}" >> ~/.oci/config
-        echo "tenancy=${{ secrets.OCI_TENANCY_OCID }}" >> ~/.oci/config
-        echo "region=${{ secrets.OCI_REGION }}" >> ~/.oci/config
-        echo "key_file=~/.oci/oci_api_key.pem" >> ~/.oci/config
-        
-        echo "${{ secrets.OCI_KEY_FILE }}" > ~/.oci/api_key.pem
-        chmod 600 ~/.oci/api_key.pem
+    # Uses Oracle's verified official setup handler to ensure path integration
+    - name: Install and Configure OCI CLI
+      uses: oracle-actions/setup-oci-cli@v1.3.2
+      with:
+        user: ${{ secrets.OCI_USER_OCID }}
+        fingerprint: ${{ secrets.OCI_FINGERPRINT }}
+        tenancy: ${{ secrets.OCI_TENANCY_OCID }}
+        region: ${{ secrets.OCI_REGION }}
+        api_key: ${{ secrets.OCI_KEY_FILE }}
 
     - name: Prepare SSH Public Key File
       run: |
@@ -38,8 +32,8 @@ jobs:
       run: |
         echo "Finding the latest Canonical Ubuntu 24.04 Minimal ARM image..."
         
-        # We use /home/runner/bin/oci to completely bypass the 127 command not found error
-        IMAGE_ID=$(/home/runner/bin/oci compute image list \
+        # Safe path query
+        IMAGE_ID=$(oci compute image list \
           --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
           --operating-system "Canonical Ubuntu" \
           --operating-system-version "24.04" \
@@ -48,7 +42,7 @@ jobs:
           
         if [ "$IMAGE_ID" == "null" ] || [ -z "$IMAGE_ID" ]; then
           echo "Error: Could not find Minimal image. Checking all 24.04 ARM images as fallback..."
-          IMAGE_ID=$(/home/runner/bin/oci compute image list \
+          IMAGE_ID=$(oci compute image list \
             --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
             --operating-system "Canonical Ubuntu" \
             --operating-system-version "24.04" \
@@ -59,8 +53,8 @@ jobs:
         echo "Successfully resolved Image ID: $IMAGE_ID"
 
         # Attempt to launch the ARM Always Free instance
-        /home/runner/bin/oci compute instance launch \
-          --availability-domain $(/home/runner/bin/oci iam availability-domain list --output table --query "data.name" --raw-output | head -n 1) \
+        oci compute instance launch \
+          --availability-domain $(oci iam availability-domain list --output table --query "data.name" --raw-output | head -n 1) \
           --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
           --shape "VM.Standard.A1.Flex" \
           --shape-config '{"ocpus":4,"memoryInGBs":24}' \
