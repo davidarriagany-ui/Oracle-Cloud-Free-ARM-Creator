@@ -5,13 +5,6 @@ on:
     - cron: '*/15 * * * *'   # Retry every 15 min until Oracle has A1.Flex capacity
   workflow_dispatch:          # Allows manually triggering from the Actions tab
 
-env:
-  OCI_CLI_USER: ${{ secrets.OCI_USER_OCID }}
-  OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
-  OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
-  OCI_CLI_REGION: ${{ secrets.OCI_REGION }}
-  OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_KEY_FILE }}
-
 jobs:
   create_instance:
     runs-on: ubuntu-latest
@@ -24,20 +17,41 @@ jobs:
           echo "${{ secrets.OCI_SSH_PUBLIC_KEY }}" > ~/instance_ssh_key.pub
           chmod 600 ~/instance_ssh_key.pub
 
-      # Oracle only publishes oracle-actions/run-oci-cli-command, and it's
-      # built to run a SINGLE "oci" subcommand — not a multi-line bash
-      # script with variables, conditionals, and loops. There is no
-      # separate "configure-oci-cli" action, so we install the CLI
-      # ourselves with pip. The OCI CLI natively reads OCI_CLI_USER,
-      # OCI_CLI_TENANCY, OCI_CLI_FINGERPRINT, OCI_CLI_KEY_CONTENT, and
-      # OCI_CLI_REGION straight from the environment (already set at the
-      # workflow level above), so no config file is required.
       - name: Install OCI CLI
         run: pip install --upgrade oci-cli
 
+      # The OCI CLI's environment-variable auth (OCI_CLI_USER etc.) is
+      # unreliable in practice: the CLI still checks for a config file at
+      # ~/.oci/config by default, and if one exists but is incomplete, it
+      # errors out instead of falling back to env vars. Writing a real
+      # config file — the approach Oracle's own docs recommend for CI —
+      # avoids that entirely.
+      #
+      # The private key itself is written to its own file with strict
+      # permissions (600), since OCI CLI requires "key_file" to be a path,
+      # not the raw key content, when using a config file.
+      - name: Configure OCI CLI
+        run: |
+          mkdir -p ~/.oci
+          echo "${{ secrets.OCI_KEY_FILE }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+
+          # Using printf (one line per key) instead of a heredoc, since a
+          # heredoc here would inherit this YAML block's leading
+          # whitespace, and Python's configparser treats indented lines
+          # as continuations of the previous value rather than new keys —
+          # that would silently corrupt the file.
+          printf '[DEFAULT]\n' > ~/.oci/config
+          printf 'user=%s\n' "${{ secrets.OCI_USER_OCID }}" >> ~/.oci/config
+          printf 'fingerprint=%s\n' "${{ secrets.OCI_FINGERPRINT }}" >> ~/.oci/config
+          printf 'tenancy=%s\n' "${{ secrets.OCI_TENANCY_OCID }}" >> ~/.oci/config
+          printf 'region=%s\n' "${{ secrets.OCI_REGION }}" >> ~/.oci/config
+          printf 'key_file=%s\n' "$HOME/.oci/oci_api_key.pem" >> ~/.oci/config
+          chmod 600 ~/.oci/config
+
       # All the actual multi-step logic (variable assignment, conditionals,
-      # loops) now runs as a normal bash script, with the oci CLI already
-      # on PATH and authenticated via the env vars set above.
+      # loops) runs as a normal bash script, with the oci CLI already on
+      # PATH and authenticated via the ~/.oci/config file written above.
       - name: Find Image and Launch Instance
         env:
           COMPARTMENT_ID: ${{ secrets.OCI_COMPARTMENT_OCID }}
