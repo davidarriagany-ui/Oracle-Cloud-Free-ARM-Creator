@@ -1,8 +1,9 @@
 name: Oracle Cloud Free ARM Creator (Ubuntu Minimal)
+
 on:
   schedule:
     - cron: '*/15 * * * *'   # Retry every 15 min until Oracle has A1.Flex capacity
-  workflow_dispatch:          # Allow manual trigger from the Actions tab
+  workflow_dispatch:          # Allows manually triggering from the Actions tab
 
 env:
   OCI_CLI_USER: ${{ secrets.OCI_USER_OCID }}
@@ -23,85 +24,96 @@ jobs:
           echo "${{ secrets.OCI_SSH_PUBLIC_KEY }}" > ~/instance_ssh_key.pub
           chmod 600 ~/instance_ssh_key.pub
 
-      - name: Run Auto-Discovery and Create Instance
-        uses: oracle-actions/run-oci-cli-command@v1.3.2
-        with:
-          command: |
-            set -e  # Fail fast on any unexpected error
+      # This action's job is ONLY to install and configure the OCI CLI
+      # (using the env vars above). It is not used to run our script —
+      # trying to pass a whole multi-line bash script into its `command:`
+      # input causes an "oci" usage error (exit code 2), because that
+      # action expects a single oci subcommand, not shell logic.
+      - name: Install and Configure OCI CLI
+        uses: oracle-actions/configure-oci-cli@v1.3.2
 
-            DISPLAY_NAME="Free-Ubuntu-24-04-Minimal"
+      # All the actual multi-step logic (variable assignment, conditionals,
+      # loops) now runs as a normal bash script, with the oci CLI already
+      # on PATH and authenticated via the env vars set above.
+      - name: Find Image and Launch Instance
+        env:
+          COMPARTMENT_ID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          SUBNET_ID: ${{ secrets.OCI_SUBNET_OCID }}
+        run: |
+          set -e  # Fail fast on any unexpected error
 
-            # --- Step 1: Skip everything if the instance already exists ---
-            # Prevents duplicate launches (and quota exhaustion) once we've
-            # already succeeded once. Only counts instances that aren't
-            # already terminated.
-            EXISTING_ID=$(oci compute instance list \
-              --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
-              --display-name "$DISPLAY_NAME" \
-              --query "data[?\"lifecycle-state\" != 'TERMINATED'].id | [0]" \
-              --raw-output)
+          DISPLAY_NAME="Free-Ubuntu-24-04-Minimal"
 
-            if [ "$EXISTING_ID" != "null" ] && [ -n "$EXISTING_ID" ]; then
-              echo "Instance already exists ($EXISTING_ID). Nothing to do."
-              exit 0
-            fi
+          # --- Step 1: Skip everything if the instance already exists ---
+          # Prevents duplicate launches (and quota exhaustion) once we've
+          # already succeeded once. Only counts non-terminated instances.
+          EXISTING_ID=$(oci compute instance list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --display-name "$DISPLAY_NAME" \
+            --query "data[?\"lifecycle-state\" != 'TERMINATED'].id | [0]" \
+            --raw-output)
 
-            # --- Step 2: Resolve the latest Ubuntu 24.04 Minimal ARM image ---
-            echo "Finding the latest Canonical Ubuntu 24.04 Minimal ARM image..."
+          if [ "$EXISTING_ID" != "null" ] && [ -n "$EXISTING_ID" ]; then
+            echo "Instance already exists ($EXISTING_ID). Nothing to do."
+            exit 0
+          fi
+
+          # --- Step 2: Resolve the latest Ubuntu 24.04 Minimal ARM image ---
+          echo "Finding the latest Canonical Ubuntu 24.04 Minimal ARM image..."
+          IMAGE_ID=$(oci compute image list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --operating-system "Canonical Ubuntu" \
+            --operating-system-version "24.04" \
+            --query "data[?contains(\"display-name\", 'Minimal-aarch64')].id | [0]" \
+            --raw-output)
+
+          # Fallback: some regions don't publish a "Minimal" variant.
+          if [ "$IMAGE_ID" == "null" ] || [ -z "$IMAGE_ID" ]; then
+            echo "No Minimal image found. Falling back to any 24.04 ARM image..."
             IMAGE_ID=$(oci compute image list \
-              --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
+              --compartment-id "$COMPARTMENT_ID" \
               --operating-system "Canonical Ubuntu" \
               --operating-system-version "24.04" \
-              --query "data[?contains(\"display-name\", 'Minimal-aarch64')].id | [0]" \
+              --query "data[?contains(\"display-name\", 'aarch64')].id | [0]" \
               --raw-output)
+          fi
 
-            # Fallback: some regions don't publish a "Minimal" variant.
-            if [ "$IMAGE_ID" == "null" ] || [ -z "$IMAGE_ID" ]; then
-              echo "No Minimal image found. Falling back to any 24.04 ARM image..."
-              IMAGE_ID=$(oci compute image list \
-                --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
-                --operating-system "Canonical Ubuntu" \
-                --operating-system-version "24.04" \
-                --query "data[?contains(\"display-name\", 'aarch64')].id | [0]" \
-                --raw-output)
+          if [ "$IMAGE_ID" == "null" ] || [ -z "$IMAGE_ID" ]; then
+            echo "Error: No suitable image found. Aborting."
+            exit 1
+          fi
+          echo "Resolved Image ID: $IMAGE_ID"
+
+          # --- Step 3: Try every availability domain in the region ---
+          # A1.Flex capacity is scarce and varies AD-by-AD, so looping
+          # through all of them in one run gives a much higher success
+          # rate than only trying the first one.
+          AD_LIST=$(oci iam availability-domain list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --query "data[].name" --raw-output | tr -d '[]"' | tr ',' '\n')
+
+          LAUNCHED=false
+          for AD in $AD_LIST; do
+            echo "Attempting launch in availability domain: $AD"
+            if oci compute instance launch \
+              --availability-domain "$AD" \
+              --compartment-id "$COMPARTMENT_ID" \
+              --shape "VM.Standard.A1.Flex" \
+              --shape-config '{"ocpus":4,"memoryInGBs":24}' \
+              --subnet-id "$SUBNET_ID" \
+              --display-name "$DISPLAY_NAME" \
+              --image-id "$IMAGE_ID" \
+              --ssh-authorized-keys-file ~/instance_ssh_key.pub \
+              --assign-public-ip true; then
+              echo "Success! Instance launched in $AD."
+              LAUNCHED=true
+              break
+            else
+              echo "Launch failed in $AD (likely out of capacity). Trying next AD..."
             fi
+          done
 
-            if [ "$IMAGE_ID" == "null" ] || [ -z "$IMAGE_ID" ]; then
-              echo "Error: No suitable image found. Aborting."
-              exit 1
-            fi
-            echo "Resolved Image ID: $IMAGE_ID"
-
-            # --- Step 3: Try every availability domain in the region ---
-            # A1.Flex capacity is scarce and varies AD-by-AD, so looping
-            # through all of them in one run gives a much higher success
-            # rate than only trying the first one.
-            AD_LIST=$(oci iam availability-domain list \
-              --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
-              --query "data[].name" --raw-output | tr -d '[]"' | tr ',' '\n')
-
-            LAUNCHED=false
-            for AD in $AD_LIST; do
-              echo "Attempting launch in availability domain: $AD"
-              if oci compute instance launch \
-                --availability-domain "$AD" \
-                --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
-                --shape "VM.Standard.A1.Flex" \
-                --shape-config '{"ocpus":4,"memoryInGBs":24}' \
-                --subnet-id "${{ secrets.OCI_SUBNET_OCID }}" \
-                --display-name "$DISPLAY_NAME" \
-                --image-id "$IMAGE_ID" \
-                --ssh-authorized-keys-file ~/instance_ssh_key.pub \
-                --assign-public-ip true; then
-                echo "Success! Instance launched in $AD."
-                LAUNCHED=true
-                break
-              else
-                echo "Launch failed in $AD (likely out of capacity). Trying next AD..."
-              fi
-            done
-
-            if [ "$LAUNCHED" = false ]; then
-              echo "No capacity available in any AD this run. Will retry on next schedule."
-              exit 1
-            fi
+          if [ "$LAUNCHED" = false ]; then
+            echo "No capacity available in any AD this run. Will retry on next schedule."
+            exit 1
+          fi
