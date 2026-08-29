@@ -24,13 +24,16 @@ jobs:
           echo "${{ secrets.OCI_SSH_PUBLIC_KEY }}" > ~/instance_ssh_key.pub
           chmod 600 ~/instance_ssh_key.pub
 
-      # This action's job is ONLY to install and configure the OCI CLI
-      # (using the env vars above). It is not used to run our script —
-      # trying to pass a whole multi-line bash script into its `command:`
-      # input causes an "oci" usage error (exit code 2), because that
-      # action expects a single oci subcommand, not shell logic.
-      - name: Install and Configure OCI CLI
-        uses: oracle-actions/configure-oci-cli@v1.3.2
+      # Oracle only publishes oracle-actions/run-oci-cli-command, and it's
+      # built to run a SINGLE "oci" subcommand — not a multi-line bash
+      # script with variables, conditionals, and loops. There is no
+      # separate "configure-oci-cli" action, so we install the CLI
+      # ourselves with pip. The OCI CLI natively reads OCI_CLI_USER,
+      # OCI_CLI_TENANCY, OCI_CLI_FINGERPRINT, OCI_CLI_KEY_CONTENT, and
+      # OCI_CLI_REGION straight from the environment (already set at the
+      # workflow level above), so no config file is required.
+      - name: Install OCI CLI
+        run: pip install --upgrade oci-cli
 
       # All the actual multi-step logic (variable assignment, conditionals,
       # loops) now runs as a normal bash script, with the oci CLI already
