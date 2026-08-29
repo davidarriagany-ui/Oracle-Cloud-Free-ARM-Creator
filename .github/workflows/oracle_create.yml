@@ -2,11 +2,9 @@ name: Oracle Cloud Free ARM Creator (Ubuntu Minimal)
 
 on:
   schedule:
-    # Runs every 15 minutes to stay safe from Oracle limits
     - cron: '*/15 * * * *'
-  workflow_dispatch: # Allows you to manually trigger it
+  workflow_dispatch:
 
-# We set the Oracle variables globally so the tool automatically logs in
 env:
   OCI_CLI_USER: ${{ secrets.OCI_USER_OCID }}
   OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
@@ -19,7 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v4
+      # Upgrading to v4.2.2 removes the checkout node deprecation warning
+      uses: actions/checkout@v4.2.2
 
     - name: Prepare SSH Public Key File
       run: |
@@ -29,7 +28,6 @@ jobs:
     - name: Run Auto-Discovery and Create Instance
       uses: oracle-actions/run-oci-cli-command@v1.3.2
       with:
-        # The tool only needs to know the command; it reads credentials from env above
         command: |
           echo "Finding the latest Canonical Ubuntu 24.04 Minimal ARM image..."
           
